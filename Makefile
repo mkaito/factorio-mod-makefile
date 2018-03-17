@@ -25,7 +25,7 @@ all: package
 
 package-copy: $(PKG_DIRS) $(PKG_FILES)
 	mkdir -p $(OUTPUT_DIR)
-ifneq ($(PKG_COPY),)
+ifneq ($(strip $(PKG_COPY)),)
 	cp -r $(PKG_COPY) pkg/$(OUTPUT_NAME)
 endif
 
