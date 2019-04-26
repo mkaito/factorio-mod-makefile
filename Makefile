@@ -1,22 +1,18 @@
-PKG_NAME := $(shell cat PKG_NAME)
-PACKAGE_NAME := $(if $(PKG_NAME),$(PKG_NAME),$(error No package name, please create PKG_NAME))
+PACKAGE_NAME := $(shell cat info.json|jq -r .name)
 PACKAGE_NAME := $(if $(DEV),$(PACKAGE_NAME)-dev,$(PACKAGE_NAME))
-ifneq ($(wildcard SHORT_VERSION),)
-	VERSION := $(shell cat SHORT_VERSION || true)
-	BUILD_NUMBER := $(shell git describe --tags --match 'v[0-9]*.[0-9]*' --long|cut -d- -f2 || echo 1)
-	VERSION_STRING := $(if $(VERSION),$(VERSION).$(BUILD_NUMBER),$(error No version supplied, please add it as 'VERSION=x.y'))
-else
-	VERSION := $(shell cat VERSION || true)
-	VERSION_STRING := $(if $(VERSION),$(VERSION),$(error No version supplied, please add it as 'VERSION=x.y.z'))
-endif
-
+VERSION_STRING := $(shell cat info.json|jq -r .version)
 OUTPUT_NAME := $(PACKAGE_NAME)_$(VERSION_STRING)
-OUTPUT_DIR := pkg/$(OUTPUT_NAME)
+BUILD_DIR := .build
+OUTPUT_DIR := $(BUILD_DIR)/$(OUTPUT_NAME)
+CONFIG = ./$(OUTPUT_DIR)/config.lua
+MODS_DIR := $(HOME)/.factorio/mods
+MOD_DIR := $(MODS_DIR)/$(OUTPUT_NAME)
 
-PKG_COPY := $(wildcard *.md) $(shell cat PKG_COPY || true)
+PKG_COPY := $(wildcard *.md) $(wildcard .*.md) $(wildcard graphics) $(wildcard locale) $(wildcard sounds) $(shell cat PKG_COPY || true)
 
-SED_FILES := $(shell find . -iname '*.json' -type f \! -path './pkg/*') \
-             $(shell find . -iname '*.lua' -type f \! -path './pkg/*')
+SED_FILES := $(shell find . -iname '*.json' -type f -not -path "./.*/*") \
+             $(shell find . -iname '*.lua' -type f -not -path "./.*/*")
+
 OUT_FILES := $(SED_FILES:%=$(OUTPUT_DIR)/%)
 
 SED_EXPRS := -e 's/{{MOD_NAME}}/$(PACKAGE_NAME)/g'
@@ -24,25 +20,47 @@ SED_EXPRS += -e 's/{{VERSION}}/$(VERSION_STRING)/g'
 
 all: package
 
-package-copy: $(PKG_DIRS) $(PKG_FILES)
+release: clean package tag
+
+package-copy: $(PKG_DIRS) $(PKG_FILES) $(OUT_FILES)
 	mkdir -p $(OUTPUT_DIR)
 ifneq ($(strip $(PKG_COPY)),)
-	cp -r $(PKG_COPY) pkg/$(OUTPUT_NAME)
+	cp -r $(PKG_COPY) $(OUTPUT_DIR)
 endif
 
 $(OUTPUT_DIR)/%.lua: %.lua
-	mkdir -p $(@D)
-	sed -e 's/{{__FILE__}}/'"$(strip $(subst /,\/, $(subst ./,,$*)))"'.lua/g' $(SED_EXPRS) $< > $@
-	luac -p $@
+	@mkdir -p $(@D)
+	@sed $(SED_EXPRS) $< > $@
+	@luac -p $@
+	@luacheck $@
+
 
 $(OUTPUT_DIR)/%: %
-	mkdir -p $(@D)
-	sed $(SED_EXPRS) $< > $@
+	@mkdir -p $(@D)
+	@sed $(SED_EXPRS) $< > $@
 
-package-dir: package-copy $(OUT_FILES)
+symlink: cleandest
+	ln -s $(PWD) $(MODS_DIR)/$(OUTPUT_NAME)
 
-package: package-dir
-	cd pkg && zip -r $(OUTPUT_NAME).zip $(OUTPUT_NAME)
+tag:
+	git tag -f v$(VERSION_STRING)
+
+nodebug:
+	@[ -e $(CONFIG) ] && \
+	echo Removing debug switches from config.lua && \
+	sed -i 's/^\(.*DEBUG.*=\).*/\1 false/' $(CONFIG) && \
+	sed -i 's/^\(.*LOGLEVEL.*=\).*/\1 0/' $(CONFIG) && \
+	sed -i 's/^\(.*loglevel.*=\).*/\1 0/' $(CONFIG)
+
+package: package-copy $(OUT_FILES) nodebug
+	@cd $(BUILD_DIR) && zip -rq $(OUTPUT_NAME).zip $(OUTPUT_NAME)
+	@echo $(OUTPUT_NAME).zip ready
+
+install: package cleandest
+	cp $(BUILD_DIR)/$(OUTPUT_NAME).zip $(MOD_DIR).zip
 
 clean:
-	rm -rf pkg/$(OUTPUT_NAME)
+	@rm -rf $(BUILD_DIR)
+
+cleandest:
+	rm -rf $(MODS_DIR)/$(PACKAGE_NAME)*
